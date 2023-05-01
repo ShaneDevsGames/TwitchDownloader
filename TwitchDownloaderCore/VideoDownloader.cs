@@ -1,21 +1,26 @@
-﻿using Newtonsoft.Json.Linq;
-using System;
+﻿using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Net.Http;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using TwitchDownloaderCore.Options;
 using TwitchDownloaderCore.Tools;
+using TwitchDownloaderCore.TwitchObjects.Gql;
 
 namespace TwitchDownloaderCore
 {
     public sealed class VideoDownloader
     {
         private readonly VideoDownloadOptions downloadOptions;
+        private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromSeconds(30) };
+        private bool _shouldClearCache = true;
 
         public VideoDownloader(VideoDownloadOptions DownloadOptions)
         {
@@ -27,179 +32,67 @@ namespace TwitchDownloaderCore
 
         public async Task DownloadAsync(IProgress<ProgressReport> progress, CancellationToken cancellationToken)
         {
+            TwitchHelper.CleanupUnmanagedCacheFiles(downloadOptions.TempFolder, progress);
+
             string downloadFolder = Path.Combine(
                 downloadOptions.TempFolder,
                 $"{downloadOptions.Id}_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}");
+
+            progress.Report(new ProgressReport(ReportType.SameLineStatus, "Fetching Video Info [1/4]"));
 
             try
             {
                 ServicePointManager.DefaultConnectionLimit = downloadOptions.DownloadThreads;
 
+                GqlVideoResponse videoInfoResponse = await TwitchHelper.GetVideoInfo(downloadOptions.Id);
+                if (videoInfoResponse.data.video == null)
+                {
+                    throw new NullReferenceException("Invalid VOD, deleted/expired VOD possibly?");
+                }
+
+                GqlVideoChapterResponse videoChapterResponse = await TwitchHelper.GetVideoChapters(downloadOptions.Id);
+
+                string playlistUrl = await GetPlaylistUrl();
+                string baseUrl = playlistUrl.Substring(0, playlistUrl.LastIndexOf("/") + 1);
+
+                List<KeyValuePair<string, double>> videoList = new List<KeyValuePair<string, double>>();
+                (List<string> videoPartsList, double vodAge) = await GetVideoPartsList(playlistUrl, videoList, cancellationToken);
+                int partCount = videoPartsList.Count;
+                int doneCount = 0;
+
                 if (Directory.Exists(downloadFolder))
                     Directory.Delete(downloadFolder, true);
                 TwitchHelper.CreateDirectory(downloadFolder);
 
-                string playlistUrl;
+                progress.Report(new ProgressReport(ReportType.NewLineStatus, "Downloading 0% [2/4]"));
 
-                if (downloadOptions.PlaylistUrl == null)
+                using (var threadThrottler = new SemaphoreSlim(downloadOptions.DownloadThreads))
                 {
-                    Task<JObject> taskAccessToken = TwitchHelper.GetVideoToken(downloadOptions.Id, downloadOptions.Oauth);
-                    await taskAccessToken;
-
-                    string[] videoPlaylist = await TwitchHelper.GetVideoPlaylist(downloadOptions.Id, taskAccessToken.Result["data"]["videoPlaybackAccessToken"]["value"].ToString(), taskAccessToken.Result["data"]["videoPlaybackAccessToken"]["signature"].ToString());
-                    List<KeyValuePair<string, string>> videoQualities = new List<KeyValuePair<string, string>>();
-
-                    for (int i = 0; i < videoPlaylist.Length; i++)
+                    Task[] downloadTasks = videoPartsList.Select(request => Task.Run(async () =>
                     {
-                        if (videoPlaylist[i].Contains("#EXT-X-MEDIA"))
-                        {
-                            string lastPart = videoPlaylist[i].Substring(videoPlaylist[i].IndexOf("NAME=\"") + 6);
-                            string stringQuality = lastPart.Substring(0, lastPart.IndexOf("\""));
-
-                            if (!videoQualities.Any(x => x.Key.Equals(stringQuality)))
-                            {
-                                videoQualities.Add(new KeyValuePair<string, string>(stringQuality, videoPlaylist[i + 2]));
-                            }
-                        }
-                    }
-
-                    if (downloadOptions.Quality != null && videoQualities.Any(x => x.Key.StartsWith(downloadOptions.Quality)))
-                        playlistUrl = videoQualities.Where(x => x.Key.StartsWith(downloadOptions.Quality)).First().Value;
-                    else
-                    {
-                        //Unable to find specified quality, defaulting to highest quality
-                        playlistUrl = videoQualities.First().Value;
-                    }
-                }
-                else
-                {
-                    playlistUrl = downloadOptions.PlaylistUrl;
-                }
-
-                string baseUrl = playlistUrl.Substring(0, playlistUrl.LastIndexOf("/") + 1);
-                List<KeyValuePair<string, double>> videoList = new List<KeyValuePair<string, double>>();
-
-                double vodAge = 25;
-
-
-                using (WebClient client = new WebClient())
-                {
-                    string[] videoChunks = (await client.DownloadStringTaskAsync(playlistUrl)).Split('\n');
-
-                    try
-                    {
-                        vodAge = (DateTimeOffset.UtcNow - DateTimeOffset.Parse(videoChunks.First(x => x.Contains("#ID3-EQUIV-TDTG:")).Replace("#ID3-EQUIV-TDTG:", ""))).TotalHours;
-                    }
-                    catch { }
-
-                    for (int i = 0; i < videoChunks.Length; i++)
-                    {
-                        if (videoChunks[i].Contains("#EXTINF"))
-                        {
-                            if (videoChunks[i + 1].Contains("#EXT-X-BYTERANGE"))
-                            {
-                                if (videoList.Any(x => x.Key == videoChunks[i + 2]))
-                                {
-                                    KeyValuePair<string, double> pair = videoList.Where(x => x.Key == videoChunks[i + 2]).First();
-                                    pair = new KeyValuePair<string, double>(pair.Key, pair.Value + Double.Parse(videoChunks[i].Remove(0, 8).TrimEnd(','), CultureInfo.InvariantCulture));
-                                }
-                                else
-                                {
-                                    videoList.Add(new KeyValuePair<string, double>(videoChunks[i + 2], Double.Parse(videoChunks[i].Remove(0, 8).TrimEnd(','), CultureInfo.InvariantCulture)));
-                                }
-                            }
-                            else
-                            {
-                                videoList.Add(new KeyValuePair<string, double>(videoChunks[i + 1], Double.Parse(videoChunks[i].Remove(0, 8).TrimEnd(','), CultureInfo.InvariantCulture)));
-                            }
-                        }
-                    }
-                }
-
-                List<KeyValuePair<string, double>> videoListCropped = GenerateCroppedVideoList(videoList, downloadOptions);
-                Queue<string> videoParts = new Queue<string>();
-                videoListCropped.ForEach(x => videoParts.Enqueue(x.Key));
-                List<string> videoPartsList = new List<string>(videoParts);
-                int partCount = videoParts.Count;
-                int doneCount = 0;
-
-                using (var throttler = new SemaphoreSlim(downloadOptions.DownloadThreads))
-                {
-                    Task[] downloadTasks = videoParts.Select(request => Task.Run(async () =>
-                    {
-                        await throttler.WaitAsync();
+                        await threadThrottler.WaitAsync(cancellationToken);
                         try
                         {
-                            bool isDone = false;
-                            bool tryUnmute = vodAge < 24;
-                            int errorCount = 0;
-                            while (!isDone && errorCount < 10)
-                            {
-                                cancellationToken.ThrowIfCancellationRequested();
-                                try
-                                {
-                                    using (WebClient client = new WebClient())
-                                    {
-                                        if (tryUnmute && request.Contains("-muted"))
-                                        {
-                                            await client.DownloadFileTaskAsync(baseUrl + request.Replace("-muted", ""), Path.Combine(downloadFolder, RemoveQueryString(request)));
-                                        }
-                                        else
-                                        {
-                                            await client.DownloadFileTaskAsync(baseUrl + request, Path.Combine(downloadFolder, RemoveQueryString(request)));
-                                        }
-
-                                        isDone = true;
-                                    }
-                                }
-                                catch (WebException ex)
-                                {
-                                    errorCount++;
-                                    Debug.WriteLine(ex);
-
-                                    HttpStatusCode? status = (ex.Response as HttpWebResponse)?.StatusCode;
-                                    if (status != null && status == HttpStatusCode.Forbidden)
-                                    {
-                                        tryUnmute = false;
-                                    }
-                                    else
-                                    {
-                                        await Task.Delay(10000);
-                                    }
-                                }
-                            }
-
-                            if (!isDone)
-                                throw new Exception("Video part " + request + " failed after 10 retries");
+                            await DownloadVideoPartAsync(baseUrl, request, downloadFolder, vodAge, downloadOptions.ThrottleKib, cancellationToken);
 
                             doneCount++;
-                            int percent = (int)Math.Floor(((double)doneCount / (double)partCount) * 100);
-                            progress.Report(new ProgressReport() { ReportType = ReportType.StatusInfo, Data = String.Format("Downloading {0}% (1/3)", percent) });
-                            progress.Report(new ProgressReport() { ReportType = ReportType.Percent, Data = percent });
-
-                            return;
-                        }
-                        catch (Exception ex) when (ex is not OperationCanceledException)
-                        {
-                            Debug.WriteLine(ex);
+                            int percent = (int)(doneCount / (double)partCount * 100);
+                            progress.Report(new ProgressReport(ReportType.SameLineStatus, $"Downloading {percent}% [2/4]"));
+                            progress.Report(new ProgressReport(percent));
                         }
                         finally
                         {
-                            throttler.Release();
-                            CheckCancelation(cancellationToken, downloadFolder);
+                            threadThrottler.Release();
                         }
-                    })).ToArray();
+                    }, cancellationToken)).ToArray();
                     await Task.WhenAll(downloadTasks);
                 }
 
-                CheckCancelation(cancellationToken, downloadFolder);
+                progress.Report(new ProgressReport() { ReportType = ReportType.NewLineStatus, Data = "Combining Parts 0% [3/4]" });
 
-                progress.Report(new ProgressReport() { ReportType = ReportType.Status, Data = "Combining Parts (2/3)" });
-                progress.Report(new ProgressReport() { ReportType = ReportType.Percent, Data = 0 });
+                await CombineVideoParts(downloadFolder, videoPartsList, progress, cancellationToken);
 
-                await CombineVideoParts(progress, downloadFolder, videoPartsList, cancellationToken);
-
-                progress.Report(new ProgressReport() { ReportType = ReportType.Status, Data = $"Finalizing Video (3/3)" });
+                progress.Report(new ProgressReport() { ReportType = ReportType.NewLineStatus, Data = $"Finalizing Video 0% [4/4]" });
 
                 double startOffset = 0.0;
 
@@ -214,63 +107,330 @@ namespace TwitchDownloaderCore
                 double seekTime = downloadOptions.CropBeginningTime;
                 double seekDuration = Math.Round(downloadOptions.CropEndingTime - seekTime);
 
-                await Task.Run(() =>
+                string metadataPath = Path.Combine(downloadFolder, "metadata.txt");
+                await FfmpegMetadata.SerializeAsync(metadataPath, videoInfoResponse.data.video.owner.displayName, startOffset, downloadOptions.Id,
+                    videoInfoResponse.data.video.title, videoInfoResponse.data.video.createdAt, videoChapterResponse.data.video.moments.edges, cancellationToken);
+
+                var finalizedFileDirectory = Directory.GetParent(Path.GetFullPath(downloadOptions.Filename))!;
+                if (!finalizedFileDirectory.Exists)
                 {
-                    var process = new Process
-                    {
-                        StartInfo =
-                            {
-                                FileName = downloadOptions.FfmpegPath,
-                                Arguments = String.Format("-hide_banner -loglevel error -stats -y -avoid_negative_ts make_zero " + (downloadOptions.CropBeginning ? "-ss {1} " : "") + "-i \"{0}\" -analyzeduration {2} -probesize {2} " + (downloadOptions.CropEnding ? "-t {3} " : "") + "-c:v copy \"{4}\"", Path.Combine(downloadFolder, "output.ts"), (seekTime - startOffset).ToString(CultureInfo.InvariantCulture), Int32.MaxValue, seekDuration.ToString(CultureInfo.InvariantCulture), Path.GetFullPath(downloadOptions.Filename)),
-                                UseShellExecute = false,
-                                CreateNoWindow = true,
-                                RedirectStandardInput = false,
-                                RedirectStandardOutput = false,
-                                RedirectStandardError = false
-                            }
-                    };
-                    process.Start();
-                    process.WaitForExit();
-                });
-                Cleanup(downloadFolder);
-            }
-            catch
-            {
-                Cleanup(downloadFolder);
-                throw;
-            }
-        }
+                    TwitchHelper.CreateDirectory(finalizedFileDirectory.FullName);
+                }
 
-        private async Task CombineVideoParts(IProgress<ProgressReport> progress, string downloadFolder, List<string> videoPartsList, CancellationToken cancellationToken)
-        {
-            DriveInfo outputDrive = DriveHelper.GetOutputDrive(downloadFolder);
-
-            string outputFile = Path.Combine(downloadFolder, "output.ts");
-            using (FileStream outputStream = new FileStream(outputFile, FileMode.Create, FileAccess.Write))
-            {
-                foreach (var part in videoPartsList)
+                int ffmpegExitCode;
+                var ffmpegRetries = 0;
+                do
                 {
-                    await DriveHelper.WaitForDrive(outputDrive, progress, cancellationToken);
-
-                    string file = Path.Combine(downloadFolder, RemoveQueryString(part));
-                    if (File.Exists(file))
+                    ffmpegExitCode = await Task.Run(() => RunFfmpegVideoCopy(progress, downloadFolder, metadataPath, seekTime, startOffset, seekDuration), cancellationToken);
+                    if (ffmpegExitCode != 0)
                     {
-                        byte[] writeBytes = File.ReadAllBytes(file);
-                        outputStream.Write(writeBytes, 0, writeBytes.Length);
-
-                        try
-                        {
-                            File.Delete(file);
-                        }
-                        catch { }
+                        progress.Report(new ProgressReport(ReportType.Log, $"Failed to finalize video (code {ffmpegExitCode}), retrying in 10 seconds..."));
+                        await Task.Delay(10_000, cancellationToken);
                     }
-                    CheckCancelation(cancellationToken, downloadFolder);
+                } while (ffmpegExitCode != 0 && ffmpegRetries++ < 1);
+
+                if (ffmpegExitCode != 0 || !File.Exists(downloadOptions.Filename))
+                {
+                    _shouldClearCache = false;
+                    throw new Exception($"Failed to finalize video. The download cache has not been cleared and can be found at {downloadFolder} along with a log file.");
+                }
+
+                progress.Report(new ProgressReport(ReportType.SameLineStatus, "Finalizing Video 100% [4/4]"));
+                progress.Report(new ProgressReport(100));
+            }
+            finally
+            {
+                if (_shouldClearCache)
+                {
+                    Cleanup(downloadFolder);
                 }
             }
         }
 
+        private int RunFfmpegVideoCopy(IProgress<ProgressReport> progress, string downloadFolder, string metadataPath, double seekTime, double startOffset, double seekDuration)
+        {
+            var process = new Process
+            {
+                StartInfo =
+                {
+                    FileName = downloadOptions.FfmpegPath,
+                    Arguments = string.Format(
+                        "-hide_banner -stats -y -avoid_negative_ts make_zero " + (downloadOptions.CropBeginning ? "-ss {2} " : "") + "-i \"{0}\" -i \"{1}\" -map_metadata 1 -analyzeduration {3} -probesize {3} " + (downloadOptions.CropEnding ? "-t {4} " : "") + "-c:v copy \"{5}\"",
+                        Path.Combine(downloadFolder, "output.ts"), metadataPath, (seekTime - startOffset).ToString(CultureInfo.InvariantCulture), int.MaxValue, seekDuration.ToString(CultureInfo.InvariantCulture), Path.GetFullPath(downloadOptions.Filename)),
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardInput = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
+                }
+            };
+
+            var videoLength = TimeSpan.Zero;
+            var videoLengthRegex = new Regex(@"(?<=^\s?\s?Duration:\s)(\d\d):(\d\d):(\d\d)\.(\d\d)", RegexOptions.Multiline);
+            var encodingTimeRegex = new Regex(@"(?<=time=)(\d\d):(\d\d):(\d\d)\.(\d\d)", RegexOptions.Compiled);
+            var logQueue = new ConcurrentQueue<string>();
+
+            process.ErrorDataReceived += (sender, e) =>
+            {
+                if (e.Data is null)
+                    return;
+
+                logQueue.Enqueue(e.Data); // We cannot use -report ffmpeg arg because it redirects stderr
+
+                if (videoLength == TimeSpan.Zero)
+                {
+                    var videoLengthMatch = videoLengthRegex.Match(e.Data);
+                    if (!videoLengthMatch.Success)
+                        return;
+
+                    // TimeSpan.Parse insists that hours cannot be greater than 24, thus we must use the TimeSpan ctor.
+                    if (!int.TryParse(videoLengthMatch.Groups[1].ValueSpan, out var hours)) return;
+                    if (!int.TryParse(videoLengthMatch.Groups[2].ValueSpan, out var minutes)) return;
+                    if (!int.TryParse(videoLengthMatch.Groups[3].ValueSpan, out var seconds)) return;
+                    if (!int.TryParse(videoLengthMatch.Groups[4].ValueSpan, out var milliseconds)) return;
+                    videoLength = new TimeSpan(0, hours, minutes, seconds, milliseconds);
+                    return;
+                }
+
+                HandleFfmpegOutput(e.Data, encodingTimeRegex, videoLength, progress);
+            };
+
+            process.Start();
+            process.BeginErrorReadLine();
+
+            using var logWriter = File.AppendText(Path.Combine(downloadFolder, "ffmpegLog.txt"));
+            do // We cannot handle logging inside the ErrorDataReceived lambda because more than 1 can come in at once and cause a race condition. lay295#598
+            {
+                Thread.Sleep(330);
+                while (!logQueue.IsEmpty && logQueue.TryDequeue(out var logMessage))
+                {
+                    logWriter.WriteLine(logMessage);
+                }
+            } while (!process.HasExited || !logQueue.IsEmpty);
+
+            return process.ExitCode;
+        }
+
+        private static void HandleFfmpegOutput(string output, Regex encodingTimeRegex, TimeSpan videoLength, IProgress<ProgressReport> progress)
+        {
+            var encodingTimeMatch = encodingTimeRegex.Match(output);
+            if (!encodingTimeMatch.Success)
+                return;
+
+            // TimeSpan.Parse insists that hours cannot be greater than 24, thus we must use the TimeSpan ctor.
+            if (!int.TryParse(encodingTimeMatch.Groups[1].ValueSpan, out var hours)) return;
+            if (!int.TryParse(encodingTimeMatch.Groups[2].ValueSpan, out var minutes)) return;
+            if (!int.TryParse(encodingTimeMatch.Groups[3].ValueSpan, out var seconds)) return;
+            if (!int.TryParse(encodingTimeMatch.Groups[4].ValueSpan, out var milliseconds)) return;
+            var encodingTime = new TimeSpan(0, hours, minutes, seconds, milliseconds);
+
+            var percent = (int)(encodingTime.TotalMilliseconds / videoLength.TotalMilliseconds * 100);
+
+            progress.Report(new ProgressReport(ReportType.SameLineStatus, $"Finalizing Video {percent}% [4/4]"));
+            progress.Report(new ProgressReport(percent));
+        }
+
+        private async Task DownloadVideoPartAsync(string baseUrl, string videoPartName, string downloadFolder, double vodAge, int throttleKib, CancellationToken cancellationToken)
+        {
+            bool tryUnmute = vodAge < 24;
+            int errorCount = 0;
+            int timeoutCount = 0;
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                // There is a cleaner way to do delayed retries with Polly but in this
+                // scenario we need more control than just blindly retrying
+                try
+                {
+                    if (tryUnmute && videoPartName.Contains("-muted"))
+                    {
+                        await DownloadFileTaskAsync(baseUrl + videoPartName.Replace("-muted", ""), Path.Combine(downloadFolder, RemoveQueryString(videoPartName)), throttleKib, cancellationToken);
+                    }
+                    else
+                    {
+                        await DownloadFileTaskAsync(baseUrl + videoPartName, Path.Combine(downloadFolder, RemoveQueryString(videoPartName)), throttleKib, cancellationToken);
+                    }
+
+                    return;
+                }
+                catch (HttpRequestException ex) when (tryUnmute && ex.StatusCode is HttpStatusCode.Forbidden)
+                {
+                    tryUnmute = false;
+                }
+                catch (HttpRequestException)
+                {
+                    if (++errorCount > 10)
+                    {
+                        throw new HttpRequestException($"Video part {videoPartName} failed after 10 retries");
+                    }
+
+                    await Task.Delay(1_000 * errorCount, cancellationToken);
+                }
+                catch (TaskCanceledException ex) when (ex.Message.Contains("HttpClient.Timeout"))
+                {
+                    if (++timeoutCount > 3)
+                    {
+                        throw new HttpRequestException($"Video part {videoPartName} timed out 3 times");
+                    }
+
+                    await Task.Delay(5_000 * timeoutCount, cancellationToken);
+                }
+            }
+        }
+
+        private async Task<(List<string> videoParts, double vodAge)> GetVideoPartsList(string playlistUrl, List<KeyValuePair<string, double>> videoList, CancellationToken cancellationToken)
+        {
+            string[] videoChunks = (await _httpClient.GetStringAsync(playlistUrl, cancellationToken)).Split('\n');
+
+            double vodAge = 25;
+
+            try
+            {
+                vodAge = (DateTimeOffset.UtcNow - DateTimeOffset.Parse(videoChunks.First(x => x.StartsWith("#ID3-EQUIV-TDTG:")).Replace("#ID3-EQUIV-TDTG:", ""))).TotalHours;
+            }
+            catch { }
+
+            for (int i = 0; i < videoChunks.Length; i++)
+            {
+                if (videoChunks[i].StartsWith("#EXTINF"))
+                {
+                    if (videoChunks[i + 1].StartsWith("#EXT-X-BYTERANGE"))
+                    {
+                        if (videoList.Any(x => x.Key == videoChunks[i + 2]))
+                        {
+                            KeyValuePair<string, double> pair = videoList.Where(x => x.Key == videoChunks[i + 2]).First();
+                            pair = new KeyValuePair<string, double>(pair.Key, pair.Value + Double.Parse(videoChunks[i].Remove(0, 8).TrimEnd(','), CultureInfo.InvariantCulture));
+                        }
+                        else
+                        {
+                            videoList.Add(new KeyValuePair<string, double>(videoChunks[i + 2], Double.Parse(videoChunks[i].Remove(0, 8).TrimEnd(','), CultureInfo.InvariantCulture)));
+                        }
+                    }
+                    else
+                    {
+                        videoList.Add(new KeyValuePair<string, double>(videoChunks[i + 1], Double.Parse(videoChunks[i].Remove(0, 8).TrimEnd(','), CultureInfo.InvariantCulture)));
+                    }
+                }
+            }
+
+            List<KeyValuePair<string, double>> videoListCropped = GenerateCroppedVideoList(videoList, downloadOptions);
+
+            List<string> videoParts = new List<string>(videoListCropped.Count);
+            foreach (var part in videoListCropped)
+            {
+                videoParts.Add(part.Key);
+            }
+
+            return (videoParts, vodAge);
+        }
+
+        private async Task<string> GetPlaylistUrl()
+        {
+            GqlVideoTokenResponse accessToken = await TwitchHelper.GetVideoToken(downloadOptions.Id, downloadOptions.Oauth);
+
+            if (accessToken.data.videoPlaybackAccessToken is null)
+            {
+                throw new NullReferenceException("Invalid VOD, deleted/expired VOD possibly?");
+            }
+
+            string[] videoPlaylist = await TwitchHelper.GetVideoPlaylist(downloadOptions.Id, accessToken.data.videoPlaybackAccessToken.value, accessToken.data.videoPlaybackAccessToken.signature);
+            if (videoPlaylist[0].Contains("vod_manifest_restricted"))
+            {
+                throw new NullReferenceException("Insufficient access to VOD, OAuth may be required.");
+            }
+
+            List<KeyValuePair<string, string>> videoQualities = new List<KeyValuePair<string, string>>();
+
+            for (int i = 0; i < videoPlaylist.Length; i++)
+            {
+                if (videoPlaylist[i].Contains("#EXT-X-MEDIA"))
+                {
+                    string lastPart = videoPlaylist[i].Substring(videoPlaylist[i].IndexOf("NAME=\"") + 6);
+                    string stringQuality = lastPart.Substring(0, lastPart.IndexOf("\""));
+
+                    if (!videoQualities.Any(x => x.Key.Equals(stringQuality)))
+                    {
+                        videoQualities.Add(new KeyValuePair<string, string>(stringQuality, videoPlaylist[i + 2]));
+                    }
+                }
+            }
+
+            if (downloadOptions.Quality != null && videoQualities.Any(x => x.Key.StartsWith(downloadOptions.Quality)))
+            {
+                return videoQualities.First(x => x.Key.StartsWith(downloadOptions.Quality)).Value;
+            }
+
+            // Unable to find specified quality, defaulting to highest quality
+            return videoQualities.First().Value;
+        }
+
+        /// <summary>
+        /// Downloads the requested <paramref name="url"/> to the <paramref name="destinationFile"/> without storing it in memory.
+        /// </summary>
+        /// <param name="url">The url of the file to download.</param>
+        /// <param name="destinationFile">The path to the file where download will be saved.</param>
+        /// <param name="throttleKib">The maximum download speed in kibibytes per second, or -1 for no maximum.</param>
+        /// <param name="cancellationToken">The cancellation token to cancel the operation.</param>
+        private async Task DownloadFileTaskAsync(string url, string destinationFile, int throttleKib, CancellationToken cancellationToken = default)
+        {
+            var request = new HttpRequestMessage(HttpMethod.Get, url);
+
+            using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+            response.EnsureSuccessStatusCode();
+
+            if (throttleKib == -1)
+            {
+                await using var fs = new FileStream(destinationFile, FileMode.Create, FileAccess.Write, FileShare.Read);
+                await response.Content.CopyToAsync(fs, cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                await using var throttledStream = new ThrottledStream(await response.Content.ReadAsStreamAsync(cancellationToken), throttleKib);
+                await using var fs = new FileStream(destinationFile, FileMode.Create, FileAccess.Write, FileShare.Read);
+                await throttledStream.CopyToAsync(fs, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        private static async Task CombineVideoParts(string downloadFolder, List<string> videoParts, IProgress<ProgressReport> progress, CancellationToken cancellationToken)
+        {
+            DriveInfo outputDrive = DriveHelper.GetOutputDrive(downloadFolder);
+            string outputFile = Path.Combine(downloadFolder, "output.ts");
+
+            int partCount = videoParts.Count;
+            int doneCount = 0;
+
+            await using var outputStream = new FileStream(outputFile, FileMode.Create, FileAccess.Write, FileShare.None);
+            foreach (var part in videoParts)
+            {
+                await DriveHelper.WaitForDrive(outputDrive, progress, cancellationToken);
+
+                string partFile = Path.Combine(downloadFolder, RemoveQueryString(part));
+                if (File.Exists(partFile))
+                {
+                    await using (var fs = File.Open(partFile, FileMode.Open, FileAccess.Read, FileShare.None))
+                    {
+                        await fs.CopyToAsync(outputStream, cancellationToken).ConfigureAwait(false);
+                    }
+
+                    try
+                    {
+                        File.Delete(partFile);
+                    }
+                    catch { /* If we can't delete, oh well. It should get cleanup up later anyways */ }
+                }
+
+                doneCount++;
+                int percent = (int)(doneCount / (double)partCount * 100);
+                progress.Report(new ProgressReport(ReportType.SameLineStatus, $"Combining Parts {percent}% [3/4]"));
+                progress.Report(new ProgressReport(percent));
+
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+        }
+
         //Some old twitch VODs have files with a query string at the end such as 1.ts?offset=blah which isn't a valid filename
-        private string RemoveQueryString(string inputString)
+        private static string RemoveQueryString(string inputString)
         {
             if (inputString.Contains('?'))
             {
@@ -282,22 +442,19 @@ namespace TwitchDownloaderCore
             }
         }
 
-        private void Cleanup(string downloadFolder)
+        private static void Cleanup(string downloadFolder)
         {
-            if (Directory.Exists(downloadFolder))
-                Directory.Delete(downloadFolder, true);
-        }
-
-        private void CheckCancelation(CancellationToken cancellationToken, string downloadFolder)
-        {
-            if (cancellationToken.IsCancellationRequested)
+            try
             {
-                Cleanup(downloadFolder);
-                cancellationToken.ThrowIfCancellationRequested();
+                if (Directory.Exists(downloadFolder))
+                {
+                    Directory.Delete(downloadFolder, true);
+                }
             }
+            catch (IOException) { } // Directory is probably being used by another process
         }
 
-        private List<KeyValuePair<string, double>> GenerateCroppedVideoList(List<KeyValuePair<string, double>> videoList, VideoDownloadOptions downloadOptions)
+        private static List<KeyValuePair<string, double>> GenerateCroppedVideoList(List<KeyValuePair<string, double>> videoList, VideoDownloadOptions downloadOptions)
         {
             List<KeyValuePair<string, double>> returnList = new List<KeyValuePair<string, double>>(videoList);
             TimeSpan startCrop = TimeSpan.FromSeconds(downloadOptions.CropBeginningTime);

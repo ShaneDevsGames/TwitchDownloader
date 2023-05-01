@@ -17,33 +17,43 @@
 
 
 ## Chat Render Example
+
 https://user-images.githubusercontent.com/1060681/197653099-c3fd12c2-f03a-4580-84e4-63ce3f36be8d.mp4
 
 
 ## What can it do?
+
 - Download Twitch VODs
 - Download Twitch Clips
-- Download chat for VODS and Clips, in either a [JSON with all the original information](https://pastebin.com/raw/YDgRe6X4), a browser HTML file, or a [plain text file](https://pastebin.com/raw/016azeQX)
+- Download chat for VODs and Clips, in either a [JSON with all the original information](https://pastebin.com/raw/YDgRe6X4), a browser HTML file, or a [plain text file](https://pastebin.com/raw/016azeQX)
 - Update the contents of a previously generated JSON chat file with an option to save as another format
-- Use a previously generated JSON chat file to render the chat with FFZ, BTTV and 7TV support (including GIFS)
+- Use a previously generated JSON chat file to render the chat with Twitter Twemoji or Google Noto Color emojis and BTTV, FFZ, 7TV static and animated emotes
 
 # GUI
 
-## Windows
+## Windows WPF
 
 ![](https://i.imgur.com/bLegxGX.gif)
 
+### [See the full WPF documentation here](TwitchDownloaderWPF/README.md).
+
 ### Functionality
 
-The Windows GUI implements all of the main functions of the program along with some extra quality of life functions:
+The Windows WPF GUI implements all of the main functions of the program along with some extra quality of life functions:
 - Queue up multiple download/render jobs to run simultaneously
 - Create a list of download jobs from a list of vod/clip links
-- Search for and download multiple vods/clips from any streamer without leaving the app
+- Search for and download multiple VODs/clips from any streamer without leaving the app
+
+### Multi-language Support
+
+The Windows WPF GUI is available in multiple languages thanks to community translations. See the [Localization section](TwitchDownloaderWPF/README.md#localization) of the [WPF README](TwitchDownloaderWPF/README.md) for more details. 
 
 ### Theming
-The Windows GUI comes with a light and dark theme and will update according the current Windows theme by default. The GUI also supports user created themes! See `Themes/README.txt` (generated on every run) for more details.
+
+The Windows WPF GUI comes bundled with both light and dark themes, along with an option to update live according the current Windows theme. It also supports user created themes! See the [Theming section](TwitchDownloaderWPF/README.md#theming) of the [WPF README](TwitchDownloaderWPF/README.md) for more details.
 
 ### Video Demonstration
+
 https://www.youtube.com/watch?v=0W3MhfhnYjk
 (older version, same concept)
 
@@ -88,22 +98,23 @@ TwitchDownloaderCLI.exe videodownload --id <vod-id-here> -o out.mp4
 
 ## Linux – Getting started
 
-1. Ensure both `fontconfig` and `libfontconfig1` are installed. `apt-get install fontconfig libfontconfig1` on Ubuntu.
-2. Go to [Releases](https://github.com/lay295/TwitchDownloader/releases/) and download the latest binary for Linux, grab the [AUR Package](https://aur.archlinux.org/packages/twitch-downloader-bin/) for Arch Linux, or [build from source](#building-from-source).
-3. Extract `TwitchDownloaderCLI`.
-4. Browse to where you extracted the file and give it executable rights in the terminal:
+1. Some distros, like Linux Alpine, lack fonts for some languages (Arabic, Persian, Thai, etc.) If this is the case for you, install additional fonts families such as [Noto](https://fonts.google.com/noto/specimen/Noto+Sans) or check your distro's wiki page on fonts as it may have an install command for this specific scenario, such as the [Linux Alpine](https://wiki.alpinelinux.org/wiki/Fonts) font page.
+2. Ensure both `fontconfig` and `libfontconfig1` are installed. `apt-get install fontconfig libfontconfig1` on Ubuntu.
+3. Go to [Releases](https://github.com/lay295/TwitchDownloader/releases/) and download the latest binary for Linux, grab the [AUR Package](https://aur.archlinux.org/packages/twitch-downloader-bin/) for Arch Linux, or [build from source](#building-from-source).
+4. Extract `TwitchDownloaderCLI`.
+5. Browse to where you extracted the file and give it executable rights in the terminal:
 ```
 sudo chmod +x TwitchDownloaderCLI
 ```
-5. a) If you do not have ffmpeg, you should install it via your distro package manager, however you can also get it as a standalone file from [ffmpeg.org](https://ffmpeg.org/download.html) or by using TwitchDownloaderCLI:
+6. a) If you do not have ffmpeg, you should install it via your distro package manager, however you can also get it as a standalone file from [ffmpeg.org](https://ffmpeg.org/download.html) or by using TwitchDownloaderCLI:
 ```
 ./TwitchDownloaderCLI ffmpeg --download
 ```
-5. b) If downloaded as a standalone file, you must also give it executable rights with:
+6. b) If downloaded as a standalone file, you must also give it executable rights with:
 ```
 sudo chmod +x ffmpeg
 ```
-6. You can now start using the downloader, for example:
+7. You can now start using the downloader, for example:
 ```
 ./TwitchDownloaderCLI videodownload --id <vod-id-here> -o out.mp4
 ```
@@ -169,3 +180,8 @@ cd TwitchDownloaderCLI/bin/Release/net6.0/publish
 # License
 
 [MIT](./LICENSE.txt)
+
+# Credits
+[Noto Color Emoji](https://github.com/googlefonts/noto-emoji) © Google and contributors.
+
+[Twemoji](https://github.com/twitter/twemoji) © Twitter and contributors.

@@ -4,13 +4,16 @@
     {
         Log,
         Percent,
-        Status,
-        StatusInfo,
+        NewLineStatus,
+        SameLineStatus,
         FfmpegLog
     }
 
     public class ProgressReport
     {
+        public ReportType ReportType { get; set; }
+        public object Data { get; set; }
+
         public ProgressReport() { }
 
         public ProgressReport(int percent)
@@ -24,8 +27,5 @@
             ReportType = reportType;
             Data = message;
         }
-
-        public ReportType ReportType { get; set; }
-        public object Data { get; set; }
     }
 }

@@ -5,7 +5,7 @@ using System.Threading.Tasks;
 using TwitchDownloaderCore;
 using TwitchDownloaderCore.Options;
 
-namespace TwitchDownloader.TwitchTasks
+namespace TwitchDownloaderWPF.TwitchTasks
 {
     class ChatRenderTask : ITwitchTask
     {
@@ -15,14 +15,18 @@ namespace TwitchDownloader.TwitchTasks
         public ChatRenderOptions DownloadOptions { get; set; }
         public CancellationTokenSource TokenSource { get; set; } = new CancellationTokenSource();
         public ITwitchTask DependantTask { get; set; }
-        public string TaskType { get; } = "Chat Render";
+        public string TaskType { get; } = Translations.Strings.ChatRender;
         public TwitchTaskException Exception { get; private set; } = new();
 
         public event PropertyChangedEventHandler PropertyChanged;
 
         public void Cancel()
         {
-            TokenSource.Cancel();
+            try
+            {
+                TokenSource.Cancel();
+            }
+            catch (ObjectDisposedException) { }
 
             if (Status == TwitchTaskStatus.Running)
             {
@@ -65,14 +69,14 @@ namespace TwitchDownloader.TwitchTasks
 
         public async Task RunAsync()
         {
-            ChatRenderer renderer = new ChatRenderer(DownloadOptions);
             Progress<ProgressReport> progress = new Progress<ProgressReport>();
             progress.ProgressChanged += Progress_ProgressChanged;
+            ChatRenderer renderer = new ChatRenderer(DownloadOptions, progress);
             ChangeStatus(TwitchTaskStatus.Running);
             try
             {
-                await renderer.ParseJsonAsync();
-                await renderer.RenderVideoAsync(progress, TokenSource.Token);
+                await renderer.ParseJsonAsync(TokenSource.Token);
+                await renderer.RenderVideoAsync(TokenSource.Token);
                 if (TokenSource.IsCancellationRequested)
                 {
                     ChangeStatus(TwitchTaskStatus.Cancelled);
@@ -84,7 +88,7 @@ namespace TwitchDownloader.TwitchTasks
                     OnPropertyChanged(nameof(Progress));
                 }
             }
-            catch (OperationCanceledException)
+            catch (Exception ex) when (ex is OperationCanceledException or TaskCanceledException)
             {
                 ChangeStatus(TwitchTaskStatus.Cancelled);
             }
@@ -95,6 +99,7 @@ namespace TwitchDownloader.TwitchTasks
                 OnPropertyChanged(nameof(Exception));
             }
             renderer = null;
+            TokenSource.Dispose();
             GC.Collect();
             GC.WaitForPendingFinalizers();
         }

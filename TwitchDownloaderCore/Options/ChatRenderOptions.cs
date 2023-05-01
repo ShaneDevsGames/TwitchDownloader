@@ -1,7 +1,7 @@
 ﻿using SkiaSharp;
 using System;
-using System.Collections.Generic;
 using System.IO;
+using TwitchDownloaderCore.Chat;
 
 namespace TwitchDownloaderCore.Options
 {
@@ -23,7 +23,7 @@ namespace TwitchDownloaderCore.Options
         public SKFontStyle MessageFontStyle { get; set; }
         public SKFontStyle UsernameFontStyle { get; set; }
         public double ReferenceScale => FontSize / 24;
-        public int SectionHeight => (int)(40 * ReferenceScale);
+        public int SectionHeight => (int)(40 * ReferenceScale * SectionHeightScale);
         public bool Timestamp { get; set; }
         public int Framerate { get; set; }
         public double UpdateRate { get; set; }
@@ -56,19 +56,36 @@ namespace TwitchDownloaderCore.Options
         public string TempFolder { get; set; }
         public bool SubMessages { get; set; }
         public bool ChatBadges { get; set; }
-        public List<string> IgnoreUsersList { get; set; } = new List<string>();
+        public string[] IgnoreUsersArray { get; set; } = Array.Empty<string>();
+        public string[] BannedWordsArray { get; set; } = Array.Empty<string>();
         public double EmoteScale { get; set; } = 1.0;
+        public double BadgeScale { get; set; } = 1.0;
+        public double EmojiScale { get; set; } = 1.0;
+        public double VerticalSpacingScale { get; set; } = 1.0;
+        public double SidePaddingScale { get; set; } = 1.0;
+        public double SectionHeightScale { get; set; } = 1.0;
+        public double WordSpacingScale { get; set; } = 1.0;
+        public double EmoteSpacingScale { get; set; } = 1.0;
+        public double AccentStrokeScale { get; set; } = 1.0;
+        public double AccentIndentScale { get; set; } = 1.0;
         public int RenderThreads { get; set; } = 1;
         public int ChatBadgeMask { get; set; } = 0;
         public int StartOverride { get; set; } = -1;
         public int EndOverride { get; set; } = -1;
-        public int SidePadding => (int)(6 * ReferenceScale);
-        public int VerticalPadding => (int)(24 * ReferenceScale);
-        public int WordSpacing => (int)(6 * ReferenceScale);
-        public int EmoteSpacing => (int)(6 * ReferenceScale);
-        public int AscentStrokeWidth => (int)(12 * ReferenceScale);
-        public int AscentIndentWidth => (int)(24 * ReferenceScale);
+        public int SidePadding => (int)(6 * ReferenceScale * SidePaddingScale);
+        public int VerticalPadding => (int)(24 * ReferenceScale * VerticalSpacingScale);
+        public int WordSpacing => (int)(6 * ReferenceScale * WordSpacingScale);
+        public int EmoteSpacing => (int)(6 * ReferenceScale * EmoteSpacingScale);
+        public int AccentStrokeWidth => (int)(8 * ReferenceScale * AccentStrokeScale);
+        public int AccentIndentWidth => (int)(32 * ReferenceScale * AccentIndentScale);
         public bool Offline { get; set; }
         public bool LogFfmpegOutput { get; set; } = false;
+        public bool BlockArtPreWrap { get; set; } = false;
+        public double BlockArtPreWrapWidth { get; set; }
+        public float BlockArtCharWidth { get; set; }
+        public bool AllowUnlistedEmotes { get; set; } = true;
+        public bool DisperseCommentOffsets { get; set; } = true;
+        public bool SkipDriveWaiting { get; set; } = false;
+        public EmojiVendor EmojiVendor { get; set; } = EmojiVendor.GoogleNotoColor;
     }
 }
