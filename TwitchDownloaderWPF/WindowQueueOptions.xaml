@@ -18,6 +18,8 @@
 		<RadioButton x:Name="radioHTML" IsEnabled="False" Content="HTML" HorizontalAlignment="Left" Margin="130,87,0,0" VerticalAlignment="Top" Checked="radioHTML_Checked" Background="{DynamicResource AppRadio}" BorderBrush="{DynamicResource AppElementBorder}" Foreground="{DynamicResource AppText}"/>
 		<CheckBox x:Name="checkEmbed" IsEnabled="False" Content="Embed Emotes" HorizontalAlignment="Left" Margin="27,115,0,0" VerticalAlignment="Top" BorderBrush="{DynamicResource AppElementBorder}" Foreground="{DynamicResource AppText}"/>
 		<CheckBox x:Name="checkVideo" Content="Download Video" HorizontalAlignment="Left" Margin="10,43,0,0" VerticalAlignment="Top" BorderBrush="{DynamicResource AppElementBorder}" Foreground="{DynamicResource AppText}"/>
+        <CheckBox x:Name="checkCombine" Content="Combine Video" HorizontalAlignment="Left" Margin="10,147,0,0" VerticalAlignment="Top" BorderBrush="{DynamicResource AppElementBorder}" Foreground="{DynamicResource AppText}"/>
+
 
     </Grid>
 </Window>

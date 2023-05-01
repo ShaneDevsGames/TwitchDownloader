@@ -76,6 +76,9 @@ namespace TwitchDownloader
                             case ChatRenderTask:
                                 currentRender++;
                                 break;
+                            case CombineRenderTask:
+                                currentRender++;
+                                break;
                         }
                     }
                 }
@@ -103,6 +106,10 @@ namespace TwitchDownloader
                                 task.RunAsync();
                                 break;
                             case ChatRenderTask when currentRender < maxRender:
+                                currentRender++;
+                                task.RunAsync();
+                                break;
+                            case CombineRenderTask when currentRender < maxRender:
                                 currentRender++;
                                 task.RunAsync();
                                 break;

@@ -168,6 +168,7 @@ namespace TwitchDownloader
                                 {
                                     PageQueue.taskList.Add(renderTask);
                                 }
+                                
                             }
                         }
 
@@ -367,11 +368,12 @@ namespace TwitchDownloader
                     {
                         for (int i = 0; i < dataList.Count; i++)
                         {
+                            VodDownloadTask vodDownloadTask = new VodDownloadTask();
                             if ((bool)checkVideo.IsChecked)
                             {
                                 if (dataList[i].Id.All(Char.IsDigit))
                                 {
-                                    VodDownloadTask downloadTask = new VodDownloadTask();
+
                                     VideoDownloadOptions downloadOptions = new VideoDownloadOptions();
                                     downloadOptions.Oauth = Settings.Default.OAuth;
                                     downloadOptions.TempFolder = Settings.Default.TempPath;
@@ -381,14 +383,14 @@ namespace TwitchDownloader
                                     downloadOptions.CropEnding = false;
                                     downloadOptions.DownloadThreads = Settings.Default.VodDownloadThreads;
                                     downloadOptions.Filename = Path.Combine(folderPath, MainWindow.GetFilename(Settings.Default.TemplateVod, dataList[i].Title, dataList[i].Id, dataList[i].Time, dataList[i].Streamer) + ".mp4");
-                                    downloadTask.DownloadOptions = downloadOptions;
-                                    downloadTask.Info.Title = dataList[i].Title;
-                                    downloadTask.Info.Thumbnail = dataList[i].Thumbnail;
-                                    downloadTask.ChangeStatus(TwitchTaskStatus.Ready);
+                                    vodDownloadTask.DownloadOptions = downloadOptions;
+                                    vodDownloadTask.Info.Title = dataList[i].Title;
+                                    vodDownloadTask.Info.Thumbnail = dataList[i].Thumbnail;
+                                    vodDownloadTask.ChangeStatus(TwitchTaskStatus.Ready);
 
                                     lock (PageQueue.taskLock)
                                     {
-                                        PageQueue.taskList.Add(downloadTask);
+                                        PageQueue.taskList.Add(vodDownloadTask);
                                     }
                                 }
                                 else
@@ -454,6 +456,25 @@ namespace TwitchDownloader
                                     lock (PageQueue.taskLock)
                                     {
                                         PageQueue.taskList.Add(renderTask);
+                                    }
+
+                                    if ((bool)checkCombine.IsChecked)
+                                    {
+                                        CombineRenderTask combineRenderTask = new CombineRenderTask();
+                                        VideoDownloadOptions videoDownloadOptions = new VideoDownloadOptions();
+                                        videoDownloadOptions.Filename = Path.Combine(folderPath, MainWindow.GetFilename(Settings.Default.TemplateChat, dataList[i].Title, dataList[i].Id, dataList[i].Time, dataList[i].Streamer) + "Combine.mp4");
+                                        combineRenderTask.VDownloadOptions = videoDownloadOptions;
+                                        combineRenderTask.DependantTask1 = vodDownloadTask;
+                                        combineRenderTask.DependantTask2 = renderTask;
+                                        combineRenderTask.ChangeStatus(TwitchTasks.TwitchTaskStatus.Waiting);
+                                        combineRenderTask.Info.Title = dataList[i].Title;
+                                        combineRenderTask.Info.Thumbnail = dataList[i].Thumbnail;
+
+                                        lock (PageQueue.taskLock)
+                                        {
+                                            PageQueue.taskList.Add(combineRenderTask);
+                                        }
+
                                     }
                                 }
                             }
