@@ -4,6 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using TwitchDownloaderCore;
 using TwitchDownloaderCore.Options;
+using TwitchDownloaderWPF.TwitchTasks;
 
 namespace TwitchDownloader.TwitchTasks
 {

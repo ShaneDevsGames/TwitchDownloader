@@ -8,6 +8,7 @@ using System.Windows.Controls;
 using TwitchDownloaderWPF.TwitchTasks;
 using TwitchDownloaderWPF.Properties;
 using System.Diagnostics;
+using TwitchDownloader.TwitchTasks;
 
 namespace TwitchDownloaderWPF
 {

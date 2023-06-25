@@ -5,6 +5,7 @@ using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using TwitchDownloader.TwitchTasks;
 using TwitchDownloaderCore.Chat;
 using TwitchDownloaderCore.Options;
 using TwitchDownloaderWPF.Properties;
@@ -392,11 +393,13 @@ namespace TwitchDownloaderWPF
 
                     for (int i = 0; i < dataList.Count; i++)
                     {
+                        VodDownloadTask vodDownloadTask = new VodDownloadTask();
                         if ((bool)checkVideo.IsChecked)
                         {
+                            
+
                             if (dataList[i].Id.All(Char.IsDigit))
                             {
-                                VodDownloadTask downloadTask = new VodDownloadTask();
                                 VideoDownloadOptions downloadOptions = new VideoDownloadOptions();
                                 downloadOptions.Oauth = Settings.Default.OAuth;
                                 downloadOptions.TempFolder = Settings.Default.TempPath;
@@ -411,14 +414,14 @@ namespace TwitchDownloaderWPF
                                 downloadOptions.Filename = Path.Combine(folderPath, FilenameService.GetFilename(Settings.Default.TemplateVod, dataList[i].Title, dataList[i].Id, dataList[i].Time, dataList[i].Streamer,
                                     downloadOptions.CropBeginning ? TimeSpan.FromSeconds(downloadOptions.CropBeginningTime) : TimeSpan.Zero,  downloadOptions.CropEnding ? TimeSpan.FromSeconds(downloadOptions.CropEndingTime) : TimeSpan.FromSeconds(dataList[i].Length)
                                     ) + ".mp4");
-                                downloadTask.DownloadOptions = downloadOptions;
-                                downloadTask.Info.Title = dataList[i].Title;
-                                downloadTask.Info.Thumbnail = dataList[i].Thumbnail;
-                                downloadTask.ChangeStatus(TwitchTaskStatus.Ready);
+                                vodDownloadTask.DownloadOptions = downloadOptions;
+                                vodDownloadTask.Info.Title = dataList[i].Title;
+                                vodDownloadTask.Info.Thumbnail = dataList[i].Thumbnail;
+                                vodDownloadTask.ChangeStatus(TwitchTaskStatus.Ready);
 
                                 lock (PageQueue.taskLock)
                                 {
-                                    PageQueue.taskList.Add(downloadTask);
+                                    PageQueue.taskList.Add(vodDownloadTask);
                                 }
                             }
                             else
@@ -471,10 +474,10 @@ namespace TwitchDownloaderWPF
                             {
                                 PageQueue.taskList.Add(downloadTask);
                             }
-
+                            ChatRenderTask renderTask = new ChatRenderTask();
                             if ((bool)checkRender.IsChecked && downloadOptions.DownloadFormat == ChatFormat.Json)
                             {
-                                ChatRenderTask renderTask = new ChatRenderTask();
+                                
                                 ChatRenderOptions renderOptions = MainWindow.pageChatRender.GetOptions(Path.ChangeExtension(downloadOptions.Filename.Replace(".gz", ""), '.' + MainWindow.pageChatRender.comboFormat.Text.ToLower()));
                                 if (renderOptions.OutputFile.Trim() == downloadOptions.Filename.Trim())
                                 {
@@ -495,9 +498,9 @@ namespace TwitchDownloaderWPF
                             }
                             if ((bool)checkCombine.IsChecked)
                                     {
-                                        CombineRenderTask combineRenderTask = new CombineRenderTask();
+                                TwitchDownloader.TwitchTasks.CombineRenderTask combineRenderTask = new CombineRenderTask();
                                         VideoDownloadOptions videoDownloadOptions = new VideoDownloadOptions();
-                                        videoDownloadOptions.Filename = Path.Combine(folderPath, MainWindow.GetFilename(Settings.Default.TemplateChat, dataList[i].Title, dataList[i].Id, dataList[i].Time, dataList[i].Streamer) + "Combine.mp4");
+                                        videoDownloadOptions.Filename = Path.Combine(folderPath, Settings.Default.TemplateChat, dataList[i].Title, dataList[i].Id, dataList[i].Time.ToString(), dataList[i].Streamer + "Combine.mp4");
                                         combineRenderTask.VDownloadOptions = videoDownloadOptions;
                                         combineRenderTask.DependantTask1 = vodDownloadTask;
                                         combineRenderTask.DependantTask2 = renderTask;
